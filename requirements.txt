@@ -8,3 +8,4 @@ python-igraph
 leidenalg
 scikit-learn
 pybiomart
+gprofiler-official
