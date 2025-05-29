@@ -1,5 +1,7 @@
 # Graphical Models Tutorial, Using GitHub Codespaces
 
+**This is the 2024 version of our Ellis Summerschool talk.  Go to the `main` branch for the most recent version.**
+
 ## Setup
 
 1) Fork this repository
