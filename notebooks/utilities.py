@@ -6,6 +6,7 @@ import igraph as ig
 import random
 import numpy as np
 import pandas as pd
+import os
 
 shape_palette = 100*[
    "circle",
