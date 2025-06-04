@@ -1,10 +1,11 @@
-from typing import Optional
+from typing import Optional, Literal
 import anndata as ad
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import igraph as ig
 import random
 import numpy as np
+import pandas as pd
 
 shape_palette = 100*[
    "circle",
@@ -175,3 +176,119 @@ def plot_cells(
     ]
     ax.legend(handles=patches, loc=legend_loc)
     return fig, ax
+
+# This is a helper function to generate our results for each cluster; run it, but don't worry too much about understanding the internals
+def plot_graph(
+    adata: ad.AnnData,
+    module: str,
+    key: str,
+    pathway_df: pd.DataFrame,
+    graph_type: Literal["glasso", "gmgm"],
+    obsp_or_varp: Literal["obsp", "varp"] = "obsp",
+    vertex_names: Optional[str] = None,
+    top_genes: int = 25,
+    top_pathways: int = 10,
+    display_centrality: Literal["degree", "harmonic", "eigenvector_centrality", "betweenness"] = "degree",
+    save: bool = True,
+) -> tuple[tuple[plt.Figure, plt.Axes], ig.Graph]:
+    leiden_string = f"leiden_{graph_type}"
+    key = f"{key}_connectivities"
+    # Create the graph for the specific module
+    if obsp_or_varp == "obsp":
+        module_idx = adata.obs[leiden_string] == module
+        name_source = adata[module_idx].obs_names
+        id = adata[module_idx].obs_names
+        if vertex_names is not None:
+            name_source = adata[module_idx].obs[vertex_names]
+        full_graph = adata[module_idx].obsp[key]
+    elif obsp_or_varp == "varp":
+        module_idx = adata.var[leiden_string] == module
+        name_source = adata[module_idx].var_names
+        id = adata[module_idx].var_names
+        if vertex_names is not None:
+            name_source = adata[module_idx].var[vertex_names]
+        full_graph = adata[module_idx].varp[key]
+    else:
+        raise ValueError("obsp_or_varp must be either 'obsp' or 'varp'")
+    
+    full_graph = ig.Graph.Weighted_Adjacency(full_graph.toarray(), mode="undirected")
+    full_graph.vs["label"] = name_source
+    full_graph.vs["label_size"] = 10
+
+    # Measure how central each gene is
+    centrality_measures = pd.DataFrame(
+            index=id,
+            data={
+                "names": full_graph.vs["label"],
+                "degree": full_graph.degree(),
+                "harmonic": full_graph.harmonic_centrality(),
+                "eigenvector_centrality": full_graph.eigenvector_centrality(),
+                "betweenness": full_graph.betweenness(),
+            }
+    )
+
+    full_graph.vs["degree"] = centrality_measures["degree"]
+    full_graph.vs["harmonic"] = centrality_measures["harmonic"]
+    full_graph.vs["eigenvector_centrality"] = centrality_measures["eigenvector_centrality"]
+    full_graph.vs["betweenness"] = centrality_measures["betweenness"]
+
+    centrality_measures = centrality_measures.sort_values(display_centrality, ascending=False)
+    ranked = centrality_measures[display_centrality]
+
+    # Subset the graph to just the most central genes
+    name_source = centrality_measures.head(top_genes)["names"]
+    idxs = centrality_measures.head(top_genes).index
+    if obsp_or_varp == "obsp":
+        graph = adata[idxs].obsp[key]
+    elif obsp_or_varp == "varp":
+        graph = adata[idxs].varp[key]
+    else:
+        raise ValueError("obsp_or_varp must be either 'obsp' or 'varp'")
+    
+
+    # Plot and save the graph
+    graph = ig.Graph.Weighted_Adjacency(graph.toarray(), mode="undirected")
+    graph.vs["label"] = name_source
+    graph.vs["label_size"] = 7
+    fig, ax = plt.subplots(figsize=(7, 7))
+    ig.plot(
+        graph,
+        vertex_size=50,
+        target=ax,
+        edge_color="black",
+    )
+    ax.set_facecolor("grey")
+    ax.set_title(f"Module {module}; top {top_genes} genes by {display_centrality}")
+    if save:
+        # Check if m{module} exists; if not, create it
+        if not os.path.exists(f"../results/{graph_type}/m{module}"):
+            os.makedirs(f"../results/{graph_type}/m{module}")
+        else:
+            # If it already exists, remove the old contents
+            shutil.rmtree(f"../results/{graph_type}/m{module}")
+            os.makedirs(f"../results/{graph_type}/m{module}")
+       
+        plt.savefig(f"../results/{graph_type}/m{module}/graph.png")
+
+        # Save the centrality measures
+        centrality_measures.to_csv(f"../results/{graph_type}/m{module}/centrality_measures.csv")
+
+        # Save the list of top N genes
+        centrality_measures["names"].head(top_genes).to_csv(
+            f"../results/{graph_type}/m{module}/top_genes.csv",
+            index=False,
+            header=False,
+            sep=",",
+        )
+
+        # Select the top 10 pathways for relevant sources
+        module_df = pathway_df[pathway_df["query"] == f"Module {module}"]
+        res = pd.concat([
+            module_df[module_df["source"] == "GO:BP"].head(top_pathways)[["source", "native", "name", "p_value"]],
+            module_df[module_df["source"] == "GO:CC"].head(top_pathways)[["source", "native", "name", "p_value"]],
+            module_df[module_df["source"] == "GO:MF"].head(top_pathways)[["source", "native", "name", "p_value"]],
+            module_df[module_df["source"] == "KEGG"].head(top_pathways)[["source", "native", "name", "p_value"]],
+        ])
+        res.to_csv(f"../results/{graph_type}/m{module}/top_pathways.csv", index=False)
+
+    return (fig, ax), graph
